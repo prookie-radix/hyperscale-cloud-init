@@ -1,5 +1,11 @@
 # Cloud-Init config to auto-setup and run a Radix Hyperscale node
 
+---
+
+**Cloud-Init file: [Link](https://raw.githubusercontent.com/prookie-radix/hyperscale-cloud-init/refs/heads/main/cloud-init.txt)**
+
+---
+
 > [!IMPORTANT]
 > ### Operating system
 > **Please use `Ubuntu 24.04`.** Other operating systems are not supported/tested.
