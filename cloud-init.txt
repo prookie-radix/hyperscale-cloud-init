@@ -1,0 +1,121 @@
+#cloud-config
+package_update: false
+package_upgrade: false
+
+packages:
+  - openjdk-21-jre-headless
+  - wget
+  - zip
+
+write_files:
+  # set new buffer size to 4MB
+  - path: /etc/sysctl.d/999-tcp-buffer-tuning.conf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      net.core.wmem_max = 4194304
+      net.core.rmem_max = 4194304
+      net.ipv4.tcp_wmem = 4096 87380 4194304
+      net.ipv4.tcp_rmem = 4096 87380 4194304
+      net.ipv4.tcp_window_scaling = 1
+
+runcmd:
+  - INSTANCES_COUNT=1
+
+  - FILE1_URL="https://hyperscale-files.astrl.trade/hyperscale.jar"
+  - FILE2_URL="https://hyperscale-files.astrl.trade/default.config"
+
+  - mkdir -p /opt/app
+
+  - wget -O /opt/app/hyperscale.jar $FILE1_URL
+  - wget -O /opt/app/default.config $FILE2_URL
+
+  - chmod +x /opt/app/hyperscale.jar
+
+  - [ sysctl, -p, /etc/sysctl.d/999-tcp-buffer-tuning.conf ]
+
+  - |
+    echo "Current settings:"
+    sysctl net.core.wmem_max
+    sysctl net.core.rmem_max
+    sysctl net.ipv4.tcp_wmem
+    sysctl net.ipv4.tcp_rmem
+    sysctl net.ipv4.tcp_window_scaling
+
+#  - |
+#    if [ ! -s /opt/app/hyperscale.jar ] || [ ! -s /opt/app/default.config ]; then
+#      echo "Error: Required files not downloaded or empty. Shutting down..."
+#      shutdown -h now
+#    fi
+
+  # Dynamically create systemd service files and modify configs
+  - |
+    for i in $(seq 0 $((INSTANCES_COUNT-1))); do
+      INSTANCE_DIR="/opt/app/instance_$i"
+      mkdir -p "$INSTANCE_DIR"
+      cp /opt/app/hyperscale.jar "$INSTANCE_DIR/"
+      cp /opt/app/default.config "$INSTANCE_DIR/"
+
+      # Update the config with unique ports (prepend a newline first)
+      printf '\n' >> "$INSTANCE_DIR/default.config"
+      printf 'api.port=%s\n' "$((8080 + i))" >> "$INSTANCE_DIR/default.config"
+      printf 'websocket.port=%s\n' "$((8880 + i))" >> "$INSTANCE_DIR/default.config"
+      printf 'network.port=%s\n' "$((30000 + i))" >> "$INSTANCE_DIR/default.config"
+
+      # Create systemd service file
+      cat <<EOF > /etc/systemd/system/cassandra$i.service
+        [Unit]
+        Description=Cassandra Service #$i
+        After=network.target
+
+        [Service]
+        ExecStart=/usr/bin/java -Xms12G -Xmx12G -jar $INSTANCE_DIR/hyperscale.jar -console
+        Restart=always
+        User=root
+        WorkingDirectory=$INSTANCE_DIR
+
+        StandardOutput=journal
+        StandardError=journal
+
+        [Install]
+        WantedBy=multi-user.target
+    EOF
+    done
+
+  - sleep 3
+
+  # Reload systemd, enable, and start the services
+  - systemctl daemon-reload
+  - sleep 3
+  - |
+    for i in $(seq 0 $((INSTANCES_COUNT-1))); do
+      systemctl enable cassandra$i.service
+      sleep 1
+      systemctl start cassandra$i.service
+      sleep 1
+    done
+
+  # Add helper function for checking status
+  - |
+    cat <<EOF > /etc/profile.d/cassandra_functions.sh
+    cassandra_status() {
+      for i in \$(seq 0 \$((${INSTANCES_COUNT}-1))); do
+        systemctl status "cassandra\$i.service"
+      done
+    }
+    EOF
+
+
+#############
+# Access dashboard(s):
+# http://11.22.33.44:8080/dashboard/index.html
+# instances will be available under 8080, 8081, 8082, ...
+#############
+
+
+#############
+# Logfile:
+# > cat /var/log/cloud-init-output.log
+# cloud-init script:
+# > cat /var/lib/cloud/instance/scripts/runcmd
+#############
